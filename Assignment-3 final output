@@ -1,0 +1,57 @@
+contacts = [
+    {"name": "Dr. Ravi", "phone": "+91  98400 12345", "email": "ravi@gmail.com"},
+    {"name": "ravi kumar", "phone": "9840012345", "email": "ravi@gmail.com"},
+    {"name": "Suresh", "phone": "9876543210", "email": "suresh@gmail.com"},
+    {"name": "Suresh", "phone": "+91 98765 43210", "email": "suresh2@gmail.com"},
+]
+
+
+def normalize(phone):
+    """Remove formatting and the Indian country code from a phone number."""
+    digits = "".join(character for character in phone if character.isdigit())
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    return digits
+
+
+def merge_contacts(records):
+    """Merge contacts that share a normalized phone number or email."""
+    merged = []
+
+    for contact in records:
+        phone = normalize(contact["phone"])
+        email = contact["email"].strip().lower()
+        matching = [
+            item for item in merged
+            if phone in item["phones"] or email in item["emails"]
+        ]
+
+        if not matching:
+            merged.append({
+                "name": contact["name"],
+                "phones": {phone},
+                "emails": {email},
+            })
+            continue
+
+        target = matching[0]
+        target["phones"].add(phone)
+        target["emails"].add(email)
+
+        # Combine any groups linked through this contact.
+        for item in matching[1:]:
+            target["phones"].update(item["phones"])
+            target["emails"].update(item["emails"])
+            merged.remove(item)
+
+    return merged
+
+
+def main():
+    print("Merged Contacts:")
+    for contact in merge_contacts(contacts):
+        print(contact)
+
+
+if __name__ == "__main__":
+    main()
