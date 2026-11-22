@@ -1,0 +1,262 @@
+import json
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
+from time import perf_counter
+
+
+PAYMENT_AMOUNT = "33.40"
+ADJUSTMENT_AMOUNT = "0.10"
+CENT = Decimal("0.01")
+STEP = Decimal("0.1")
+RATE_FILE = Path("rate_card.json")
+
+DEFAULT_RATES = {
+    "base_rate": "30.00",
+    "fat_step_value": "0.40",
+    "snf_step_value": "0.30",
+    "reference_fat": "3.5",
+    "reference_snf": "8.5",
+    "min_fat": "2.0",
+    "max_fat": "7.0",
+    "min_snf": "8.0",
+    "max_snf": "12.0",
+}
+
+
+def create_payments(count):
+    """Create the requested number of payments and three adjustments."""
+    return [PAYMENT_AMOUNT] * count + [ADJUSTMENT_AMOUNT] * 3
+
+
+def total_float(items):
+    """Calculate a total using floating-point arithmetic."""
+    total = 0.0
+    for amount in items:
+        total += float(amount)
+    return total
+
+
+def total_decimal(items):
+    """Calculate an exact total using Decimal."""
+    total = Decimal("0.00")
+    for amount in items:
+        total += Decimal(amount)
+    return total
+
+
+def rounded_total(items):
+    """Round each payment to two decimal places before adding it."""
+    total = Decimal("0.00")
+    for amount in items:
+        payment = Decimal(amount).quantize(CENT, rounding=ROUND_HALF_UP)
+        total += payment
+    return total
+
+
+def benchmark(function, items):
+    """Return the result and elapsed time in seconds."""
+    start = perf_counter()
+    result = function(items)
+    return result, perf_counter() - start
+
+
+def rate_calculated(fat, snf):
+    """Calculate milk rate from fat and SNF percentages."""
+    fat_steps = round((fat - 3.5) / 0.1)
+    snf_steps = round((snf - 8.5) / 0.1)
+    rate = 30.00 + fat_steps * 0.40 + snf_steps * 0.30
+    return round(rate, 2)
+
+
+def rate_table():
+    """Build a dictionary of rates for allowed fat and SNF values."""
+    table = {}
+    for fat_step in range(20, 71):
+        for snf_step in range(80, 121):
+            fat = fat_step / 10
+            snf = snf_step / 10
+            table[(fat, snf)] = rate_calculated(fat, snf)
+    return table
+
+
+def benchmark_rate_lookup(table, entries):
+    """Calculate total rates using dictionary lookups."""
+    total = 0.0
+    for fat, snf in entries:
+        total += table[(fat, snf)]
+    return total
+
+
+def benchmark_rate_calculation(entries):
+    """Calculate total rates without a dictionary."""
+    total = 0.0
+    for fat, snf in entries:
+        total += rate_calculated(fat, snf)
+    return total
+
+
+def run_benchmarks():
+    print("FLOAT VS DECIMAL COMPARISON")
+    print("-" * 65)
+
+    for count in (300, 6000, 150000):
+        payments = create_payments(count)
+        float_result, float_time = benchmark(total_float, payments)
+        decimal_result, decimal_time = benchmark(total_decimal, payments)
+        difference = abs(Decimal(str(float_result)) - decimal_result)
+
+        print("\nNumber of payments: {}".format(count))
+        print("Float total: {:.10f}".format(float_result))
+        print("Decimal total: {:.2f}".format(decimal_result))
+        print("Difference: {}".format(difference))
+        print("Float time: {:.6f} seconds".format(float_time))
+        print("Decimal time: {:.6f} seconds".format(decimal_time))
+
+    values = ["10.005", "10.005", "10.005"]
+    round_each = sum(
+        Decimal(value).quantize(CENT, rounding=ROUND_HALF_UP)
+        for value in values
+    )
+    round_total = sum(Decimal(value) for value in values).quantize(
+        CENT, rounding=ROUND_HALF_UP
+    )
+
+    print("\nROUNDING COMPARISON")
+    print("Round each payment:", round_each)
+    print("Round only total: ", round_total)
+
+    table = rate_table()
+    entries = [(4.2, 9.0), (3.5, 8.5), (4.0, 9.0)] * 10000
+
+    start = perf_counter()
+    lookup_total = benchmark_rate_lookup(table, entries)
+    lookup_time = perf_counter() - start
+
+    start = perf_counter()
+    calculated_total = benchmark_rate_calculation(entries)
+    calculation_time = perf_counter() - start
+
+    print("\nRATE TABLE COMPARISON")
+    print("Lookup total:", round(lookup_total, 2))
+    print("Calculated total:", round(calculated_total, 2))
+    print("Lookup time: {:.6f} seconds".format(lookup_time))
+    print("Calculation time: {:.6f} seconds".format(calculation_time))
+    print("Number of rate combinations:", len(table))
+
+
+def load_rate_card():
+    """Load rates from JSON, creating a default rate card if needed."""
+    if not RATE_FILE.exists():
+        RATE_FILE.write_text(json.dumps(DEFAULT_RATES, indent=4), encoding="utf-8")
+
+    with RATE_FILE.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    required = DEFAULT_RATES.keys()
+    if not all(key in data for key in required):
+        raise ValueError("Rate card is missing required values.")
+
+    try:
+        rates = {key: Decimal(str(data[key])) for key in required}
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("Rate card contains an invalid number.")
+
+    if not all(value.is_finite() for value in rates.values()):
+        raise ValueError("Rate card values must be finite numbers.")
+    if rates["base_rate"] < 0:
+        raise ValueError("Base rate cannot be negative.")
+    if rates["fat_step_value"] < 0 or rates["snf_step_value"] < 0:
+        raise ValueError("Step values cannot be negative.")
+    if rates["min_fat"] > rates["max_fat"]:
+        raise ValueError("Invalid fat limits.")
+    if rates["min_snf"] > rates["max_snf"]:
+        raise ValueError("Invalid SNF limits.")
+
+    return rates
+
+
+def validate_entry(litres, fat, snf, rates):
+    """Validate milk quantity and quality."""
+    return (
+        litres >= 0
+        and rates["min_fat"] <= fat <= rates["max_fat"]
+        and rates["min_snf"] <= snf <= rates["max_snf"]
+    )
+
+
+def calculate_rate(fat, snf, rates):
+    """Calculate the price per litre from fat and SNF percentages."""
+    fat_steps = ((fat - rates["reference_fat"]) / STEP).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    snf_steps = ((snf - rates["reference_snf"]) / STEP).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    rate = (
+        rates["base_rate"]
+        + fat_steps * rates["fat_step_value"]
+        + snf_steps * rates["snf_step_value"]
+    )
+    return rate.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def calculate_payment(litres, fat, snf, rates):
+    """Calculate one payment, rounded to two decimal places."""
+    if not validate_entry(litres, fat, snf, rates):
+        raise ValueError("Invalid quantity or milk quality.")
+
+    rate = calculate_rate(fat, snf, rates)
+    amount = litres * rate
+    return rate, amount.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def main():
+    """Process milk entries and print the final payment total."""
+    run_benchmarks()
+
+    try:
+        rates = load_rate_card()
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print("\nCannot load rate card:", error)
+        return
+
+    farmer_id = input("\nEnter Farmer ID: ").strip()
+    if not farmer_id:
+        print("Invalid Farmer ID.")
+        return
+
+    try:
+        count = int(input("Enter number of entries: ").strip())
+        if count <= 0:
+            print("Number of entries must be positive.")
+            return
+    except ValueError:
+        print("Enter a valid whole number.")
+        return
+
+    total = Decimal("0.00")
+    for entry_number in range(1, count + 1):
+        print("\nEntry {}".format(entry_number))
+        try:
+            litres = Decimal(input("Enter litres: ").strip())
+            fat = Decimal(input("Enter fat percentage: ").strip())
+            snf = Decimal(input("Enter SNF percentage: ").strip())
+            if not all(value.is_finite() for value in (litres, fat, snf)):
+                raise ValueError("Values must be finite numbers.")
+            rate, payment = calculate_payment(litres, fat, snf, rates)
+        except (InvalidOperation, ValueError) as error:
+            print("Invalid entry:", error)
+            return
+
+        total += payment
+        print("Rate per litre: Rs. {:.2f}".format(rate))
+        print("Payment: Rs. {:.2f}".format(payment))
+        print("Running total: Rs. {:.2f}".format(total))
+
+    print("\n----- FINAL PAYMENT SUMMARY -----")
+    print("Farmer ID:", farmer_id)
+    print("Total payment: Rs. {:.2f}".format(total))
+
+
+if __name__ == "__main__":
+    main()
