@@ -1,0 +1,42 @@
+from functools import lru_cache
+from time import perf_counter
+
+
+@lru_cache(maxsize=None)
+def old(n):
+    """Return the nth value using a cached recursive implementation."""
+    if n <= 1:
+        return 1
+    return old(n - 1) + old(n - 2)
+
+
+def new(n):
+    """Return the same value using an iterative implementation."""
+    if n <= 1:
+        return 1
+
+    previous, current = 1, 1
+    for _ in range(2, n + 1):
+        previous, current = current, previous + current
+    return current
+
+
+def main():
+    n = 30
+
+    start = perf_counter()
+    original_result = old(n)
+    original_time = perf_counter() - start
+
+    start = perf_counter()
+    redesigned_result = new(n)
+    redesigned_time = perf_counter() - start
+
+    print("Original:", original_result, original_time)
+    print("Redesigned:", redesigned_result, redesigned_time)
+    print("Same Result:", original_result == redesigned_result)
+    print("1000 steps:", len(str(new(1000))))
+
+
+if __name__ == "__main__":
+    main()
