@@ -1,0 +1,107 @@
+import sqlite3
+import time
+import string
+
+
+def benchmark_sqlite_index():
+    """Compare a filtered query before and after adding an index."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE readings (station TEXT, day TEXT, pm25 REAL)"
+    )
+
+    data = [
+        ("S{}".format(i % 100), "2026-10-{:02d}".format(i % 30 + 1), float(i % 150))
+        for i in range(100000)
+    ]
+    connection.executemany("INSERT INTO readings VALUES (?, ?, ?)", data)
+    connection.commit()
+
+    def query():
+        return connection.execute(
+            "SELECT AVG(pm25) FROM readings WHERE station = ? AND day = ?",
+            ("S10", "2026-10-10")
+        ).fetchone()
+
+    start = time.perf_counter()
+    query()
+    before = time.perf_counter() - start
+
+    connection.execute(
+        "CREATE INDEX idx_station_day ON readings (station, day)"
+    )
+    connection.commit()
+
+    start = time.perf_counter()
+    query()
+    after = time.perf_counter() - start
+
+    print("SQLITE INDEX BENCHMARK")
+    print("Before index: {:.6f} seconds".format(before))
+    print("After index:  {:.6f} seconds".format(after))
+    connection.close()
+
+
+POSITIVE_WORDS = {"clean", "fast", "improved", "helpful", "good", "excellent"}
+NEGATIVE_WORDS = {"smoke", "bad", "dirty", "unhelpful", "poor", "slow"}
+NEGATIONS = {"not", "never", "no"}
+
+
+def label(text):
+    """Classify text using a tiny word-list sentiment rule."""
+    words = [word.strip(string.punctuation).lower() for word in text.split()]
+    positive_score = 0
+    negative_score = 0
+
+    for index, word in enumerate(words):
+        if word in POSITIVE_WORDS:
+            score = -1 if index > 0 and words[index - 1] in NEGATIONS else 1
+            if score > 0:
+                positive_score += 1
+            else:
+                negative_score += 1
+        elif word in NEGATIVE_WORDS:
+            score = -1 if index > 0 and words[index - 1] in NEGATIONS else 1
+            if score > 0:
+                negative_score += 1
+            else:
+                positive_score += 1
+
+    if positive_score > negative_score:
+        return "positive"
+    if negative_score > positive_score:
+        return "negative"
+    return "neutral"
+
+
+def check_complaint_agreement():
+    """Compare rule-based predictions with the supplied human labels."""
+    complaints = [
+        ("Roads are clean and buses are fast.", "positive"),
+        ("Smoke is bad and the road is dirty.", "negative"),
+        ("The office is open today.", "neutral"),
+        ("Staff were not helpful.", "negative"),
+        ("Service improved and the staff were helpful.", "positive"),
+    ] * 10
+
+    matches = 0
+    for text, human_label in complaints:
+        if label(text) == human_label:
+            matches += 1
+
+    total = len(complaints)
+    percentage = (matches / total * 100) if total else 0
+
+    print("\nCOMPLAINT LABEL AGREEMENT")
+    print("Total:", total)
+    print("Agreements:", matches)
+    print("Agreement percentage:", round(percentage, 2))
+
+
+def main():
+    benchmark_sqlite_index()
+    check_complaint_agreement()
+
+
+if __name__ == "__main__":
+    main()
